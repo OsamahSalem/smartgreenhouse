@@ -1,0 +1,142 @@
+#include <LiquidCrystal.h>
+#include <SPI.h>
+#include <Ethernet.h>
+
+// Pin definitions
+#define SOIL_MOISTURE_PIN A0 // Soil moisture sensor connected to A0
+#define LDR_PIN A1           // Light sensor (LDR) connected to A1
+#define LED_PIN 8            // LED connected to digital pin 8
+#define MOTOR_PIN 9          // Motor connected to digital pin 9
+#define BUTTON_PIN 7         // Button connected to digital pin 7
+
+// LCD pin configuration (RS, EN, D4, D5, D6, D7)
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+// SPI/Ethernet pins
+#define W5500_CS_PIN 10  // Chip Select (CS) for W5500 (matches PB2/~10)
+#define W5500_RST_PIN 6  // Reset pin for W5500 (matches PC6/RST)
+
+// Ethernet configuration
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; // MAC address for Ethernet shield
+IPAddress ip(192, 168, 1, 177);                     // Static IP address
+EthernetServer server(80);                          // Start server on port 80
+
+void setup() {
+  // Initialize the LCD
+  lcd.begin(16, 2);
+  lcd.print("Initializing...");
+
+  // Configure pins
+  pinMode(SOIL_MOISTURE_PIN, INPUT);
+  pinMode(LDR_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(MOTOR_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(W5500_RST_PIN, OUTPUT); // Configure W5500 reset pin as output
+
+  // Reset W5500 module
+  digitalWrite(W5500_RST_PIN, LOW);  // Hold reset
+  delay(100);                        // Wait 100 ms
+  digitalWrite(W5500_RST_PIN, HIGH); // Release reset
+  delay(200);                        // Wait for W5500 to initialize
+
+  // Start Ethernet connection
+  Ethernet.init(W5500_CS_PIN); // Initialize Ethernet with correct CS pin
+  Ethernet.begin(mac);
+  server.begin();
+
+  // Initialize Serial Monitor for debugging
+  Serial.begin(9600);
+  Serial.println("Ethernet Server Initialized.");
+  Serial.print("Server IP: ");
+  Serial.println(ip);
+
+  lcd.clear();
+  lcd.print("Ethernet Ready");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  // Read sensors
+  int soilMoisture = analogRead(SOIL_MOISTURE_PIN);
+  int lightLevel = analogRead(LDR_PIN);
+  int buttonState = digitalRead(BUTTON_PIN);
+
+  // Display data on the LCD
+  lcd.setCursor(0, 0);
+  lcd.print("Soil: ");
+  lcd.print(map(soilMoisture, 0, 1023, 0, 100));
+  lcd.print("%");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Light: ");
+  lcd.print(map(lightLevel, 0, 1023, 0, 100));
+  lcd.print("%");
+
+  // Control LED and Motor based on conditions
+  if (soilMoisture < 500) { // If soil moisture is low
+    digitalWrite(LED_PIN, HIGH);  // Turn on LED
+    digitalWrite(MOTOR_PIN, HIGH); // Turn on motor
+  } else {
+    digitalWrite(LED_PIN, LOW);   // Turn off LED
+    digitalWrite(MOTOR_PIN, LOW); // Turn off motor
+  }
+
+  // Respond to button press
+  if (buttonState == LOW) { // Button is pressed
+    lcd.clear();
+    lcd.print("Button Pressed!");
+    delay(1000);
+    lcd.clear();
+  }
+
+  // Handle Ethernet client requests
+  EthernetClient client = server.available();
+  if (client) {
+    Serial.println("New client connected."); // Debugging message for connection
+    lcd.clear();
+    lcd.print("Client Connected!");
+
+    bool currentLineIsBlank = true;
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+
+        // Check for end of request
+        if (c == '\n' && currentLineIsBlank) {
+          // Send HTTP response
+          client.println("HTTP/1.1 200 OK");
+          client.println("Content-Type: text/html");
+          client.println("Connection: close");
+          client.println();
+          client.println("<!DOCTYPE HTML>");
+          client.println("<html>");
+          client.print("<p>Soil Moisture: ");
+          client.print(map(soilMoisture, 0, 1023, 0, 100));
+          client.println("%</p>");
+          client.print("<p>Light Level: ");
+          client.print(map(lightLevel, 0, 1023, 0, 100));
+          client.println("%</p>");
+          client.println("</html>");
+          break;
+        }
+
+        if (c == '\n') {
+          currentLineIsBlank = true;
+        } else if (c != '\r') {
+          currentLineIsBlank = false;
+        }
+      }
+    }
+
+    delay(1); // Give the client time to receive the data
+    client.stop(); // Close the connection
+    Serial.println("Client disconnected."); // Debugging message for disconnection
+    lcd.clear();
+    lcd.print("Client Disconnected!");
+    delay(2000); // Show the message on the LCD
+  }
+
+  delay(500); // Delay for stability
+}
